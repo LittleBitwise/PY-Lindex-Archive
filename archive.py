@@ -1,11 +1,11 @@
 from csv import writer as csv_writer
 from hashlib import md5
+from os import mkdir
+from os.path import exists
 from pandas import Timestamp
-from pprint import pp
 from requests import get as http_get
-from time import sleep, gmtime, strftime
-import os
 from requests.exceptions import RequestException
+from time import sleep, gmtime, strftime
 
 DATAFEED_HOMEPAGE = "https://api.secondlife.com/datafeeds/homepage.txt"
 DATASAMPLE_HOMEPAGE = """\
@@ -131,41 +131,55 @@ DIR_DATA = "data/"
 DIR_DATA_HOMEPAGE = "data/homepage/"
 DIR_DATA_LINDEX = "data/lindex/"
 
-if not os.path.exists(DIR_DATA):
-    os.mkdir(DIR_DATA)
+if not exists(DIR_DATA):
+    mkdir(DIR_DATA)
 
-if not os.path.exists(DIR_DATA_HOMEPAGE):
-    os.mkdir(DIR_DATA_HOMEPAGE)
+if not exists(DIR_DATA_HOMEPAGE):
+    mkdir(DIR_DATA_HOMEPAGE)
 
-if not os.path.exists(DIR_DATA_LINDEX):
-    os.mkdir(DIR_DATA_LINDEX)
+if not exists(DIR_DATA_LINDEX):
+    mkdir(DIR_DATA_LINDEX)
 
 REQUEST_TIMEOUT = 60
 REQUEST_RATE = "2 min"
+
+FORMAT_TIME_HHMMSS = "%H:%M:%S"
+FORMAT_TIME_YYMMDDHHMM = "%Y-%m-%d-%H-%M"
+
+
+def write_data(dir, data, digest, now):
+    fname = f"{strftime(FORMAT_TIME_YYMMDDHHMM, now)}-{digest}"
+    with open(dir + f"{fname}.csv", "w+", newline="") as file:
+        csv = csv_writer(file)
+        csv.writerow(["Key", "Value"])
+        for key, value in data.items():
+            csv.writerow([key, value])
+
+
+def fetch(source, destination):
+    r = http_get(source, timeout=REQUEST_TIMEOUT)
+    digest, data = multiline_to_kvp(r.text)
+    write_data(destination, data, digest, gmtime())
+    print(
+        strftime(FORMAT_TIME_HHMMSS, gmtime()),
+        r.status_code,
+        r.headers["content-type"],
+    )
 
 
 def call_api():
     now = Timestamp.now()
     next = now.ceil(REQUEST_RATE)
     print(
-        f"> woke at {now.strftime("%H:%M:%S")}, "
-        f"waiting until {next.strftime("%H:%M:%S")}"
+        f"> woke at {now.strftime(FORMAT_TIME_HHMMSS)}, "
+        f"waiting until {next.strftime(FORMAT_TIME_HHMMSS)}"
     )
     pause_until(next.timestamp())
 
     while True:
         try:
-            r = http_get(DATAFEED_HOMEPAGE, timeout=REQUEST_TIMEOUT)
-            digest, data = multiline_to_kvp(r.text)
-            write_homepage_data(data, digest, gmtime())
-            print(r.status_code, r.headers["content-type"])
-            pp(data)
-
-            r = http_get(DATAFEED_LINDEX, timeout=REQUEST_TIMEOUT)
-            digest, data = multiline_to_kvp(r.text)
-            write_lindex_data(data, digest, gmtime())
-            print(r.status_code, r.headers["content-type"])
-            pp(data)
+            fetch(DATAFEED_HOMEPAGE, DIR_DATA_HOMEPAGE)
+            fetch(DATAFEED_LINDEX, DIR_DATA_LINDEX)
         except RequestException as e:
             print("> HTTP request failed:", e)
 
@@ -178,26 +192,6 @@ def multiline_to_kvp(text):
     text = text.splitlines()
     data = dict(zip(text[0::2], text[1::2]))
     return (digest, data)
-
-
-def write_homepage_data(data, digest, now):
-
-    fname = f"{strftime("%Y-%m-%d-%H-%M", now)}-{digest}"
-    with open(DIR_DATA_HOMEPAGE + f"{fname}.csv", "w+", newline="") as file:
-        csv = csv_writer(file)
-        csv.writerow(["Key", "Value"])
-        for key, value in data.items():
-            csv.writerow([key, value])
-
-
-def write_lindex_data(data, digest, now):
-
-    fname = f"{strftime("%Y-%m-%d-%H-%M", now)}-{digest}"
-    with open(DIR_DATA_LINDEX + f"{fname}.csv", "w+", newline="") as file:
-        csv = csv_writer(file)
-        csv.writerow(["Key", "Value"])
-        for key, value in data.items():
-            csv.writerow([key, value])
 
 
 def pause_until(tstamp: int | float):
@@ -217,7 +211,10 @@ def pause_until(tstamp: int | float):
         if wait < 1:  # Don't wanna spam too much
             wait = 1  # and it's okay to overshoot
 
-        print("nap %.1fs ..." % wait)
+        print(
+            strftime(FORMAT_TIME_HHMMSS, gmtime()),
+            "nap %.1fs ..." % wait,
+        )
         sleep(wait)
 
 
